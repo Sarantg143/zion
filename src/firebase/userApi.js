@@ -1,4 +1,4 @@
-import { collection, addDoc, getDocs, updateDoc, doc, deleteDoc, query, where, getDoc } from 'firebase/firestore';
+import { collection, addDoc, getDocs, updateDoc,setDoc, doc, deleteDoc, query, where, getDoc, arrayUnion } from 'firebase/firestore';
 import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
 import { db, storage } from './firebase';
 import bcrypt from 'bcryptjs';
@@ -14,221 +14,338 @@ import {
 const auth = getAuth();
 
 
-export const signupUser = async (data, isGoogle = false) => {
+export const signupUser = async (data, isGoogleSignup = false) => {
     try {
-        if (isGoogle) {
+        const auth = getAuth();
+        const usersRef = collection(db, 'users');
+
+        let user;
+        let firstName, lastName, email, username, password, profilePicture;
+
+        if (isGoogleSignup) {
+            
             const provider = new GoogleAuthProvider();
             const result = await signInWithPopup(auth, provider);
-            const user = result.user;
+            user = result.user;
 
-            const usersRef = collection(db, 'users');
-            const existingUserQuery = query(usersRef, where('email', '==', user.email));
-            const existingUserSnapshot = await getDocs(existingUserQuery);
-
-            if (!existingUserSnapshot.empty) {
-                console.log('User already exists!');
-                return { success: false, message: 'User already exists!' };
-            }
-
-            await addDoc(usersRef, {
-                firstName: user.displayName.split(' ')[0] || '',
-                lastName: user.displayName.split(' ')[1] || '',
-                email: user.email,
-                username: user.email.split('@')[0],
-                role: 'client',
-                joinedDate: Date.now(),
-            });
-
-            return { success: true, message: 'Google user signed up successfully!' };
+            firstName = user.displayName?.split(' ')[0] || '';
+            lastName = user.displayName?.split(' ')[1] || '';
+            email = user.email;
+            username = user.email.split('@')[0];
+            profilePicture = user.photoURL || '';
+            password = null; 
         } else {
-            const usersRef = collection(db, 'users');
-
+            
             const usernameQuery = query(usersRef, where('username', '==', data.username));
-            const emailQuery = query(usersRef, where('email', '==', data.email));
             const usernameSnapshot = await getDocs(usernameQuery);
+
+            const emailQuery = query(usersRef, where('email', '==', data.email));
             const emailSnapshot = await getDocs(emailQuery);
 
-            if (!usernameSnapshot.empty) return { success: false, message: 'Username already exists!' };
-            if (!emailSnapshot.empty) return { success: false, message: 'Email already exists!' };
+            if (!usernameSnapshot.empty) {
+                return { success: false, message: 'Username already exists!' };
+            }
 
+            if (!emailSnapshot.empty) {
+                return { success: false, message: 'Email already exists!' };
+            }
             const userCredential = await createUserWithEmailAndPassword(auth, data.email, data.password);
-            const user = userCredential.user;
+            user = userCredential.user;
 
-            await addDoc(usersRef, {
-                email: data.email,
-                username: data.username,
-                role: 'client',
-                joinedDate: Date.now(),
-            });
-
-            return { success: true, message: 'User signed up successfully!' };
+            
+            firstName = data.firstName;
+            lastName = data.lastName;
+            email = data.email;
+            username = data.username;
+            profilePicture = ''; 
+            password = await bcrypt.hash(data.password, 8); 
         }
+
+        
+        if (isGoogleSignup) {
+            const userQuery = query(usersRef, where('email', '==', email));
+            const userSnapshot = await getDocs(userQuery);
+
+            if (!userSnapshot.empty) {
+                return { success: true, message: 'User already exists!' }; 
+            }
+        }
+        const userDoc = {
+            firstName,
+            lastName,
+            email,
+            username,
+            password, 
+            profilePicture,
+            profileBanner: '', 
+            mobileNo: '',
+            maritalStatus: '',
+            dob: '',
+            gender: '',
+            applyingFor: '',
+            educationalQualification: '',
+            theologicalQualification: '',
+            presentAddress: '',
+            ministryExperience: '',
+            salvationExperience: '',
+            signatureFile: '',
+            passportPhotoFile: '',
+            educationCertFile: '',
+            purchasedCourse: [],
+            role: 'client',
+            joinedDate: new Date().toISOString(),
+        };
+
+        await setDoc(doc(usersRef, user.uid), userDoc);
+
+        return { success: true, message: isGoogleSignup ? 'Google signup successful!' : 'Manual signup successful!' };
     } catch (error) {
         console.error('Error during signup:', error);
-        return { success: false, message: error.message };
+        return { success: false, message: 'Signup failed. Please try again.' };
     }
 };
 
-export const loginUser = async (data, isGoogle = false) => {
+
+export const loginUser = async (data, isGoogleLogin = false) => {
     try {
-        if (isGoogle) {
+        const auth = getAuth();
+        const usersRef = collection(db, 'users');
+        let userDoc;
+
+        if (isGoogleLogin) {
             const provider = new GoogleAuthProvider();
             const result = await signInWithPopup(auth, provider);
-            return { success: true, user: result.user, message: 'Logged in with Google!' };
-        } else {
-            const usersRef = collection(db, 'users');
+            const googleUser = result.user;
 
-            let loginQuery;
-            if (data.username) {
-                loginQuery = query(usersRef, where('username', '==', data.username));
-            } else if (data.email) {
-                loginQuery = query(usersRef, where('email', '==', data.email));
-            } else {
-                throw new Error('Username or email is required for login.');
+            const userQuery = query(usersRef, where('email', '==', googleUser.email));
+            const userSnapshot = await getDocs(userQuery);
+
+            if (userSnapshot.empty) {
+                return { success: false, message: 'User not found. Please sign up first.' };
             }
 
+            userDoc = userSnapshot.docs[0].data();
+
+            return {
+                success: true,
+                message: 'Google login successful!',
+                user: userDoc,
+            };
+        } else {
+            const { emailOrUsername, password } = data;
+
+            const loginQuery = emailOrUsername.includes('@')
+                ? query(usersRef, where('email', '==', emailOrUsername))
+                : query(usersRef, where('username', '==', emailOrUsername));
+
             const loginSnapshot = await getDocs(loginQuery);
-            if (loginSnapshot.empty) return { success: false, message: 'Invalid username or email.' };
 
-            const userData = loginSnapshot.docs[0].data();
+            if (loginSnapshot.empty) {
+                return { success: false, message: 'Invalid username or email.' };
+            }
 
-            const passwordMatch = await bcrypt.compare(data.password, userData.password);
-            if (!passwordMatch) return { success: false, message: 'Incorrect password.' };
+            userDoc = loginSnapshot.docs[0].data();
 
-            return { success: true, user: userData, message: 'Login successful!' };
+            const isPasswordValid = await bcrypt.compare(password, userDoc.password);
+            if (!isPasswordValid) {
+                return { success: false, message: 'Incorrect password.' };
+            }
+
+            await signInWithEmailAndPassword(auth, userDoc.email, password);
+
+            return {
+                success: true,
+                message: 'Login successful!',
+                user: userDoc,
+            };
         }
     } catch (error) {
         console.error('Error during login:', error);
-        return { success: false, message: error.message };
+        return { success: false, message: 'Login failed. Please try again.' };
     }
 };
+
 
 
 export const forgotPassword = async (email) => {
     try {
+        const auth = getAuth();
         await sendPasswordResetEmail(auth, email);
-        return { success: true, message: 'Password reset email sent successfully!' };
+        
+        return { success: true, message: 'Password reset email sent successfully. Please check your inbox.' };
     } catch (error) {
         console.error('Error sending password reset email:', error);
-        return { success: false, message: error.message };
+        return { success: false, message: 'Failed to send password reset email. Please try again.' };
     }
 };
 
 
-export const addUserProfile = async (userId, data) => {
-    try {
-        const userRef = doc(db, 'users', userId);
-
-        const signatureFile = data.signature[0];
-        const signatureRef = ref(storage, `signatures/${signatureFile.name}`);
-        await uploadBytes(signatureRef, signatureFile);
-        const signatureURL = await getDownloadURL(signatureRef);
-
-        const passportPhotoFile = data.passportSizePhoto[0];
-        const passportPhotoRef = ref(storage, `photos/${passportPhotoFile.name}`);
-        await uploadBytes(passportPhotoRef, passportPhotoFile);
-        const passportPhotoURL = await getDownloadURL(passportPhotoRef);
-
-        const educationCertFile = data.educationCertificate[0];
-        const educationCertRef = ref(storage, `certificates/${educationCertFile.name}`);
-        await uploadBytes(educationCertRef, educationCertFile);
-        const educationCertURL = await getDownloadURL(educationCertRef);
-
-        // Update user profile
-        await updateDoc(userRef, {
-            firstName: data.firstName,
-            lastName: data.lastName,
-            mobileNo: data.mobileNo,
-            maritalStatus: data.maritalStatus,
-            dob: data.dob,
-            gender: data.gender,
-            applyingFor: data.applyingFor,
-            educationalQualification: data.educationalQualification,
-            theologicalQualification: data.theologicalQualification,
-            presentAddress: data.presentAddress,
-            ministryExperience: data.ministryExperience,
-            salvationExperience: data.salvationExperience,
-            signatureURL,
-            passportPhotoURL,
-            educationCertURL,
-        });
-
-        console.log('User profile successfully added!');
-        return { success: true, message: 'Profile updated successfully!' };
-    } catch (error) {
-        console.error('Error adding user profile:', error);
-        return { success: false, message: error.message };
-    }
+const uploadFile = async (file, folderName) => {
+    const storageRef = ref(storage, `${folderName}/${file.name}`);
+    await uploadBytes(storageRef, file);
+    const downloadURL = await getDownloadURL(storageRef);
+    return downloadURL;
 };
 
-
-export const addDegreeToUser = async (userId, degree) => {
+export const editUser = async (userId, updatedData, files) => {
     try {
-        const userRef = doc(db, 'users', userId);
-        const userSnapshot = await getDoc(userRef);
+        const userDocRef = doc(db, 'users', userId);
 
-        if (!userSnapshot.exists()) {
-            return { success: false, message: 'User not found!' };
+        const updatedFields = {
+            firstName: updatedData.firstName || '',
+            lastName: updatedData.lastName || '',
+            email: updatedData.email || '',
+            mobileNo: updatedData.mobileNo || '',
+            maritalStatus: updatedData.maritalStatus || '',
+            dob: updatedData.dob || '',
+            gender: updatedData.gender || '',
+            applyingFor: updatedData.applyingFor || '',
+            educationalQualification: updatedData.educationalQualification || '',
+            theologicalQualification: updatedData.theologicalQualification || '',
+            presentAddress: updatedData.presentAddress || '',
+            ministryExperience: updatedData.ministryExperience || '',
+            salvationExperience: updatedData.salvationExperience || '',
+        };
+
+        if (files.profilePicture) {
+            const profilePictureUrl = await uploadFile(files.profilePicture, 'profilePictures');
+            updatedFields.profilePicture = profilePictureUrl;
         }
 
-        const userData = userSnapshot.data();
-        const purchasedDegrees = userData.purchasedDegrees || [];
-
-        const existingDegree = purchasedDegrees.find(d => d.degreeId === degree.degreeId);
-        if (existingDegree) {
-            return { success: false, message: 'Degree already added.' };
+        if (files.profileBanner) {
+            const profileBannerUrl = await uploadFile(files.profileBanner, 'profileBanners');
+            updatedFields.profileBanner = profileBannerUrl;
         }
-        const updatedDegrees = [
-            ...purchasedDegrees,
-            {
-                degreeId: degree.degreeId,
-                degreeName: degree.degreeName,
-                progress: degree.progress || 0,
-            },
-        ];
 
-        await updateDoc(userRef, { purchasedDegrees: updatedDegrees });
+        if (files.signatureFile) {
+            const signatureFileUrl = await uploadFile(files.signatureFile, 'signatures');
+            updatedFields.signatureFile = signatureFileUrl;
+        }
 
-        return { success: true, message: 'Degree added successfully!' };
+        if (files.passportPhotoFile) {
+            const passportPhotoFileUrl = await uploadFile(files.passportPhotoFile, 'passportPhotos');
+            updatedFields.passportPhotoFile = passportPhotoFileUrl;
+        }
+
+        if (files.educationCertFile) {
+            const educationCertFileUrl = await uploadFile(files.educationCertFile, 'educationCerts');
+            updatedFields.educationCertFile = educationCertFileUrl;
+        }
+
+        await updateDoc(userDocRef, updatedFields);
+
+        return { success: true, message: 'User profile updated successfully!' };
     } catch (error) {
-        console.error('Error adding degree:', error);
-        return { success: false, message: error.message };
+        console.error('Error updating user profile:', error);
+        return { success: false, message: 'Failed to update profile. Please try again.' };
     }
 };
-
 
 export const getAllUsers = async () => {
     try {
-        const data = await getDocs(collection(db, 'users'));
-        return data.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        const usersRef = collection(db, 'users'); 
+        const usersSnapshot = await getDocs(usersRef);  
+        const usersList = usersSnapshot.docs.map(doc => ({
+            id: doc.id,
+            ...doc.data(), 
+        }));
+
+        return { success: true, users: usersList };
     } catch (error) {
-        console.error(error);
+        console.error('Error getting all users:', error);
+        return { success: false, message: 'Failed to get users. Please try again.' };
+    }
+};
+
+export const getUserById = async (userId) => {
+    try {
+        const userDocRef = doc(db, 'users', userId); 
+        const userDoc = await getDoc(userDocRef);  
+
+        if (userDoc.exists()) {
+            return { success: true, user: userDoc.data() };  
+        } else {
+            return { success: false, message: 'User not found.' };
+        }
+    } catch (error) {
+        console.error('Error getting user by ID:', error);
+        return { success: false, message: 'Failed to get user. Please try again.' };
+    }
+};
+
+export const deleteUser = async (userId) => {
+    try {
+        const userDocRef = doc(db, 'users', userId);
+        await deleteDoc(userDocRef);  
+        return { success: true, message: 'User deleted successfully.' };
+    } catch (error) {
+        console.error('Error deleting user:', error);
+        return { success: false, message: 'Failed to delete user. Please try again.' };
     }
 };
 
 
-export const getUserById = async (id) => {
+
+
+export const addCourseToUser = async (userId, courseId, degreeId, degreeTitle, courseTitle) => {
     try {
-        const userDoc = doc(db, 'users', id);
-        const userSnapshot = await getDoc(userDoc);
-        return userSnapshot.exists() ? { id: userSnapshot.id, ...userSnapshot.data() } : null;
+        const userDocRef = doc(db, 'users', userId);
+
+        const purchasedCourse = {
+            courseId: courseId,
+            courseTitle: courseTitle,
+            degreeId: degreeId,
+            degreeTitle: degreeTitle,
+            progress: 0,
+            chapters: [] 
+        };
+
+        await updateDoc(userDocRef, {
+            purchasedCourses: arrayUnion(purchasedCourse),
+        });
+
+        console.log('Course added to purchased courses successfully!');
     } catch (error) {
-        console.error('Error fetching user by ID:', error);
-        return null;
+        console.error('Error adding course to user:', error);
+        throw new Error('Failed to add course to user');
     }
 };
 
-
-export const getUsersByPurchasedDegree = async (degreeId) => {
+export const markUserAnswers = async (userId, courseId, testType, answers, marks, totalMarks) => {
     try {
-        const usersRef = collection(db, 'users');
-        const q = query(usersRef, where('purchasedDegrees', 'array-contains', { degreeId }));
-        const querySnapshot = await getDocs(q);
+        const userDocRef = doc(db, 'users', userId);
 
-        return querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        const userSnap = await getDoc(userDocRef);
+        const purchasedCourses = userSnap.data().purchasedCourses;
+
+        const updatedCourses = purchasedCourses.map(course => {
+            if (course.courseId === courseId) {
+                if (testType === 'finalTest') {
+                    course.finalTestMarks = marks;
+                    course.progress = (marks / totalMarks) * 100;
+                } else {
+                    
+                    course.chapters.forEach(chapter => {
+                        chapter.lessons.forEach(lesson => {
+                            if (lesson.test?.testId === testType) {
+                                lesson.test.userMarks = marks;
+                                lesson.test.progress = (marks / totalMarks) * 100; 
+                            }
+                        });
+                    });
+                }
+            }
+            return course;
+        });
+
+        await updateDoc(userDocRef, {
+            purchasedCourses: updatedCourses,
+        });
+
+        console.log('User answers and progress updated successfully!');
     } catch (error) {
-        console.error('Error fetching users by purchased degree:', error);
-        return [];
+        console.error('Error marking user answers:', error);
+        throw new Error('Failed to mark user answers');
     }
 };
 
@@ -243,25 +360,5 @@ export const getUsersByRole = async (role) => {
     } catch (error) {
         console.error('Error fetching users by role:', error);
         return [];
-    }
-};
-
-
-export const editUser = async (id, data) => {
-    try {
-        await updateDoc(doc(db, 'users', id), { ...data });
-        return true;
-    } catch (error) {
-        console.error('Error updating user:', error);
-    }
-};
-
-
-export const deleteUser = async (id) => {
-    try {
-        await deleteDoc(doc(db, 'users', id));
-        return true;
-    } catch (error) {
-        console.error('Error deleting user:', error);
     }
 };
