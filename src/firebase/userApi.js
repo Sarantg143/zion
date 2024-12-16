@@ -362,3 +362,49 @@ export const getUsersByRole = async (role) => {
         return [];
     }
 };
+
+
+export const validateAndUpdateMarks = async (userId, courseId, testId, validatedAnswers) => {
+    try {
+        const userDocRef = doc(db, 'users', userId);
+
+        const userSnap = await getDoc(userDocRef);
+        if (!userSnap.exists()) {
+            throw new Error('User not found');
+        }
+
+        const userData = userSnap.data();
+        const updatedCourses = userData.purchasedCourses.map(course => {
+            if (course.courseId === courseId) {
+                course.chapters.forEach(chapter => {
+                    chapter.lessons.forEach(lesson => {
+                        if (lesson.test?.testId === testId) {
+                            lesson.test.questions.forEach((question, index) => {
+                                const validatedAnswer = validatedAnswers[index];
+                                
+                                if (validatedAnswer) {
+                                    
+                                    question.marks = validatedAnswer.marks;
+                                    question.validated = true; 
+                                }
+                            });
+
+                            const totalMarks = lesson.test.questions.reduce((sum, question) => sum + question.marks, 0);
+                            lesson.test.totalMarks = totalMarks;
+                        }
+                    });
+                });
+            }
+            return course;
+        });
+        await updateDoc(userDocRef, {
+            purchasedCourses: updatedCourses
+        });
+
+        console.log('Test marks updated successfully');
+        return 'Test marks updated successfully';
+    } catch (error) {
+        console.error('Error updating test marks:', error);
+        throw new Error('Failed to update test marks');
+    }
+};
